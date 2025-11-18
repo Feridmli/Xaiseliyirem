@@ -1,5 +1,5 @@
 /**
- * syncSeaportOrders.js — ApeChain On-Chain Seaport Sync (FINAL VERSION)
+ * syncSeaportOrders.js — ApeChain On-Chain Seaport Sync (FINAL CHUNKED VERSION)
  */
 
 import { ethers } from "ethers";
@@ -7,7 +7,9 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 dotenv.config();
 
-// ---- ENV CHECK ------------------------------------------------------
+/* -----------------------------------------------------------
+   ENV CHECK
+----------------------------------------------------------- */
 
 const BACKEND_URL = process.env.BACKEND_URL;
 const NFT_CONTRACT_ADDRESS = process.env.NFT_CONTRACT_ADDRESS;
@@ -19,7 +21,9 @@ if (!BACKEND_URL || !NFT_CONTRACT_ADDRESS || !SEAPORT_CONTRACT_ADDRESS) {
   process.exit(1);
 }
 
-// ---- MULTI RPC FAILOVER ---------------------------------------------
+/* -----------------------------------------------------------
+   MULTI-RPC FAILOVER
+----------------------------------------------------------- */
 
 const RPC_LIST = [
   process.env.APECHAIN_RPC,
@@ -52,7 +56,9 @@ async function initProvider() {
   }
 }
 
-// ---- SEAPORT ABIs ---------------------------------------------------
+/* -----------------------------------------------------------
+   SEAPORT ABI-lər
+----------------------------------------------------------- */
 
 const seaportABI = [
   "event OrderFulfilled(bytes32 indexed orderHash,address indexed offerer,address indexed fulfiller,bytes orderDetails)",
@@ -67,7 +73,9 @@ const altABI = [
 let seaportContractPrimary;
 let seaportContractAlt;
 
-// ---- BACKEND POST ----------------------------------------------------
+/* -----------------------------------------------------------
+   BACKEND POST
+----------------------------------------------------------- */
 
 async function postOrderEvent(payload) {
   try {
@@ -88,30 +96,53 @@ async function postOrderEvent(payload) {
   }
 }
 
-// ---- MAIN ------------------------------------------------------------
+/* -----------------------------------------------------------
+   CHUNKED QUERY SYSTEM (DRPC limit fix)
+----------------------------------------------------------- */
+
+const CHUNK = 5000;   // DRPC limit: max 10k → biz 5000 götürürük
+
+async function queryInChunks(callback, from, to) {
+  let start = from;
+
+  while (start <= to) {
+    const end = Math.min(start + CHUNK, to);
+
+    console.log(`🔍 Chunk scan: ${start} → ${end}`);
+
+    try {
+      await callback(start, end);
+    } catch (e) {
+      console.log("⚠️ Chunk error:", e.message);
+    }
+
+    start = end + 1;
+  }
+}
+
+/* -----------------------------------------------------------
+   MAIN
+----------------------------------------------------------- */
 
 async function main() {
-  console.log("🚀 On-chain Seaport Sync başladı...");
+  console.log("🚀 On-chain Seaport Sync başladı...\n");
 
-  // Provider seçilsin
   await initProvider();
   console.log("🔗 İstifadə olunan RPC:", provider.connection.url);
 
-  // Contractları bağlayırıq
   seaportContractPrimary = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, seaportABI, provider);
   seaportContractAlt     = new ethers.Contract(SEAPORT_CONTRACT_ADDRESS, altABI, provider);
 
-  // Block aralığı
-  const toBlock = await provider.getBlockNumber();
-  console.log(`🔎 Bloklar skan edilir: ${FROM_BLOCK} → ${toBlock}`);
+  const latestBlock = await provider.getBlockNumber();
+  console.log(`🔎 Blok aralığı: ${FROM_BLOCK} → ${latestBlock}\n`);
 
-  // ---------------------- ORDER FULFILLED (PRIMARY ABI) ----------------------
+  /* -----------------------------------------------------------
+     PRIMARY ABI — OrderFulfilled
+  ----------------------------------------------------------- */
 
-  try {
+  await queryInChunks(async (start, end) => {
     const filter = seaportContractPrimary.filters.OrderFulfilled();
-    const events = await seaportContractPrimary.queryFilter(filter, FROM_BLOCK, toBlock);
-
-    console.log(`📦 Primary ABI Fulfilled Events: ${events.length}`);
+    const events = await seaportContractPrimary.queryFilter(filter, start, end);
 
     for (const ev of events) {
       const args = ev.args || {};
@@ -131,19 +162,17 @@ async function main() {
       };
 
       const sent = await postOrderEvent(payload);
-      console.log(sent ? `✅ Fulfilled sent: ${args.orderHash}` : `❌ Failed: ${args.orderHash}`);
+      console.log(sent ? `✅ Primary Fulfilled: ${args.orderHash}` : `❌ Fail: ${args.orderHash}`);
     }
-  } catch (e) {
-    console.warn("⚠️ PRIMARY OrderFulfilled processing failed:", e.message);
-  }
+  }, FROM_BLOCK, latestBlock);
 
-  // ---------------------- ORDER FULFILLED (ALT ABI) ----------------------
+  /* -----------------------------------------------------------
+     ALT ABI — OrderFulfilled
+  ----------------------------------------------------------- */
 
-  try {
+  await queryInChunks(async (start, end) => {
     const filter = seaportContractAlt.filters.OrderFulfilled();
-    const events = await seaportContractAlt.queryFilter(filter, FROM_BLOCK, toBlock);
-
-    console.log(`📦 Alt ABI Fulfilled Events: ${events.length}`);
+    const events = await seaportContractAlt.queryFilter(filter, start, end);
 
     for (const ev of events) {
       const args = ev.args || {};
@@ -163,19 +192,17 @@ async function main() {
       };
 
       const sent = await postOrderEvent(payload);
-      console.log(sent ? `✅ Alt Fulfilled sent: ${args.orderHash}` : `❌ Failed: ${args.orderHash}`);
+      console.log(sent ? `✅ Alt Fulfilled: ${args.orderHash}` : `❌ Fail: ${args.orderHash}`);
     }
-  } catch (e) {
-    console.warn("⚠️ ALT OrderFulfilled processing failed:", e.message);
-  }
+  }, FROM_BLOCK, latestBlock);
 
-  // ---------------------- ORDER CANCELLED ------------------------------------
+  /* -----------------------------------------------------------
+     Cancelled Events
+  ----------------------------------------------------------- */
 
-  try {
+  await queryInChunks(async (start, end) => {
     const filter = seaportContractPrimary.filters.OrderCancelled();
-    const events = await seaportContractPrimary.queryFilter(filter, FROM_BLOCK, toBlock);
-
-    console.log(`🗑 Cancelled Events: ${events.length}`);
+    const events = await seaportContractPrimary.queryFilter(filter, start, end);
 
     for (const ev of events) {
       const args = ev.args || {};
@@ -193,14 +220,16 @@ async function main() {
       };
 
       const sent = await postOrderEvent(payload);
-      console.log(sent ? `🗑 Cancelled sent: ${args.orderHash}` : `❌ Failed: ${args.orderHash}`);
+      console.log(sent ? `🗑 Cancelled: ${args.orderHash}` : `❌ Fail: ${args.orderHash}`);
     }
-  } catch (e) {
-    console.warn("⚠️ Cancelled processing failed:", e.message);
-  }
+  }, FROM_BLOCK, latestBlock);
 
-  console.log("🎉 On-chain Seaport Sync tamamlandı!");
+  console.log("\n🎉 On-chain Seaport Sync tamamlandı!");
 }
+
+/* -----------------------------------------------------------
+   RUN
+----------------------------------------------------------- */
 
 main().catch(err => {
   console.error("💀 Fatal:", err);
