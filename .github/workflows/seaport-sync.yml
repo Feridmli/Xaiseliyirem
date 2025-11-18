@@ -3,7 +3,7 @@ name: Seaport Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"  # hər 30 dəqiqədə sync
+    - cron: "*/30 * * * *"
 
 jobs:
   sync:
@@ -20,6 +20,13 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Debug secrets
+        run: |
+          echo "FROM_BLOCK = ${{ secrets.FROM_BLOCK }}"
+          echo "APECHAIN_RPC length = ${#APECHAIN_RPC}"
+        env:
+          APECHAIN_RPC: ${{ secrets.APECHAIN_RPC }}
 
       - name: Run Seaport Sync
         env:
