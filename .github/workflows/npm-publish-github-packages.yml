@@ -1,0 +1,36 @@
+name: Seaport Sync
+
+on:
+  workflow_dispatch:        # Manual işə salmaq üçün
+  schedule:
+    - cron: "*/30 * * * *"   # Hər 30 dəqiqə sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Seaport Sync
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NFT_CONTRACT_ADDRESS: ${{ secrets.NFT_CONTRACT_ADDRESS }}
+          SEAPORT_CONTRACT_ADDRESS: ${{ secrets.SEAPORT_CONTRACT_ADDRESS }}
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+
+          # Optional RPC (boş olsa belə problem yaratmır)
+          APECHAIN_RPC: ${{ secrets.APECHAIN_RPC }}
+
+          # Blok nömrəsi verməsən → kod avtomatik 33139000 istifadə edəcək
+          FROM_BLOCK: ${{ secrets.FROM_BLOCK }}
+        run: node syncSeaportOrders.js
